@@ -259,7 +259,7 @@ mydat <- merge(long_data, estBi, by='sid',all=T)
 fm2 <- Cij ~ 1 + t_star + sin_term + risk1 + risk2 + b11
 md2 <- glm(fm2, data = mydat, family = binomial())
 
-# (3) GLME model for Cij
+# (3) GLME model for Zij
 
 fm3 <-  Zij ~ 1 + t  + sin_term + t_dij_star + b11 + ( t - 1 | sid)
 md3 <- glmer(fm3, data = mydat, family = binomial())
@@ -309,7 +309,7 @@ glmeObject1 <- list(
   lower = 0,
   upper = Inf,
   str_val=c(fixef(md1), sd(ranef(md1)$sid[,1])),
-  CenObject=CenObject)
+  CenObject=NULL)
 
 
 
@@ -369,14 +369,14 @@ new_sd1 = JMsd_aGH(testjm_without, ghsize=4, srcpath=srcpath, paralle=T)
 JMsummary(testjm_without, new_sd1$sd_naive)
 
 set.seed(3)
-testjm12  <- try(JMfit(glmeObject, survObject1, 
+testjm1  <- try(JMfit(glmeObject, survObject1, 
                       long_data, surv_data_final,
                       idVar="sid", eventTime="L",
                       survFit=fitCOX1,
                       method = "h-likelihood", Silent=T), silent=F) 
 
 
-testjm1$RespLog
+
 
 # return coefficient table of Fixed effects 
 JMsummary(testjm1)
@@ -462,6 +462,8 @@ JMsummary(K1)
 
 
 # ----------------NLME + Right censored ---------------
+
+# ----------------NLME + Right censored ---------------
 long_df <- as.data.frame(dataset_new_NLME)
 long_df$Zij <- long_data$Zij
 long_df$sin_term <- long_data$sin_term
@@ -492,33 +494,31 @@ fitCOX1_nlme <- coxph(Surv(L, dropped_out_right) ~ GNE8_CD4 + risk1 + risk2 + b_
 
 
 
+fe0 <- fixef(fit_nlme)                                                    
+sd0 <- sqrt(as.numeric(VarCorr(fit_nlme)["lambda", "Variance"]))        
+div <- 100                                                               
+
 nlmeObject <- list(
-  type = "nlme",
-  family = "EXP_Delay",
-  fm = nl_formula,
-  sigma = "sigma",
-  disp = "sigma_b11",                          # dispersion of standardised b_11
-  lower = 0,                                   # sigma_b11 >= 0
-  upper = Inf,
-  A_names = paste0("A",1:7),
-  ind_names = paste0("ind_k",1:7),
-  lag_names = paste0("lag_k",1:7),
-  lambda_name = "lambda",
-  ran_map = list(
-    lambda = "b_11"
-  ),
-  re_disp = list(
-    b_11 = "sigma_b11"                         # lambda_i = exp(lambda + sigma_b11 * b_11)
-  ),
-  str_val = c(as.list(fixef(fit_nlme)),
-              sd(ranef(fit_nlme)[["lambda"]]),  # sigma_b11 starting value (~0.0038)
-              fit_nlme$sigma),                  # sigma (NAb measurement error) starting value
-  CenObject = NULL
+  type         = "nlme",
+  family       = "EXP_Delay",
+  fm           = nl_formula,                
+  sigma        = "sigma",
+  disp         = "sigma_b11",               
+  lower        = 0,                          # sigma_b11 >= 0
+  upper        = Inf,
+  A_names      = paste0("A", 1:7),
+  ind_names    = paste0("ind_k", 1:7),
+  lag_names    = paste0("lag_k", 1:7),
+  lambda_name  = "lambda",
+  lambda_scale = "identity",                 # lambda_i = (lambda + sigma_b11 * b_11) / div
+  lambda_div   = div,
+  ran_map      = list(lambda = "b_11"),
+  re_disp      = list(b_11 = "sigma_b11"),
+  str_val      = c(fe0[paste0("A", 1:7)],
+                   lambda    = unname(fe0["lambda"]) * div,   
+                   sigma_b11 = sd0 * div),                   
+  CenObject    = NULL
 )
-
-
-nlmeObject$str_val$lambda <- log(nlmeObject$str_val$lambda)
-
 
 
 # binary data
@@ -546,7 +546,7 @@ survObject_nlme <- list(
   str_val= summary(fitCOX1_nlme)$coeff[,1])
 
 set.seed(2)
-H <- JMfit(
+  H <- JMfit(
   glmeObject = glmeObject_nlme,
   survObject = survObject_nlme,
   long.data = long_df, 
@@ -558,5 +558,3 @@ H <- JMfit(
 
 
 JMsummary(H)
-new_sd2 = JMsd_aGH(H, ghsize=4, srcpath=srcpath, paralle=T)
-JMsummary(H, new_sd2$sd_robust)
