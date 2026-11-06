@@ -12,7 +12,7 @@ SimData3 <- function(n=200,
                      ZX=c('year','sindoes','doesW', 'trb1'), 
                      YX=NULL, sigma_lme=NULL, 
                      A=c(1.49, 0.74, 0.18, 0.18, 0.21, 0.06, 0.03), 
-                     lambda = -5.51, sigma_nlme = 0.62,
+                     lambda = 0.0185, d1 = 0.0066, sigma_nlme = 0.62,
                      Vtime=c(0,1,6,12,18,24,30),
                      endTrial=36,
                      alpha=c(-1.65, 0.15, 1.8, -0.05, 0.4,0.15), 
@@ -90,7 +90,7 @@ SimData3 <- function(n=200,
   # (1) generate exponential delay data
   if (!is.null(A)) {
     dose_time <- Vtime
-    rate_i <- exp(lambda + dat$trb1) # subject-specific rate
+    rate_i <- lambda + d1 * dat$trb1 # subject-specific rate
     lag_mat <- sapply(dose_time, function(tk) pmax(dat$time - tk, 0)) #  lag: lag_k = max(time - tk, 0)
     ind_mat <- sapply(dose_time, function(tk) as.numeric(dat$time >= tk)) # # time >= tk
     
@@ -304,7 +304,7 @@ run_one_sim <- function(seed = NULL, save_dir = "E:/UBC/Final Project/New folder
                       ZX=c('month','sindoes','doesW', 'trb1'), 
                       YX=NULL, sigma_lme=NULL, 
                       A=c(1.49, 0.74, 0.18, 0.18, 0.21, 0.06, 0.03), 
-                      lambda = -5.51, sigma_nlme = 0.62,
+                      lambda = 0.0185, d1 = 0.0066, sigma_nlme = 0.62,
                       Vtime=c(0,1,6,12,18,24,30),
                       endTrial=36,
                       alpha=c(-1.65, 0.11, 1.6, -0.02, 0.17, 0.09), 
@@ -323,7 +323,7 @@ run_one_sim <- function(seed = NULL, save_dir = "E:/UBC/Final Project/New folder
  ) 
  
  
- Sim_1$dat
+
  
  
  # (1) Model 1: NLME of y
@@ -339,12 +339,12 @@ run_one_sim <- function(seed = NULL, save_dir = "E:/UBC/Final Project/New folder
  
  start_nls <- list(
    A1=.5,A2=.6,A3=.6,A4=.6,A5=.5,A6=.5,A7=.5,
-   lambda= 1
+   lambda= 0.02
  )
  
  fit_nls <- nls(
    fm1_sim, data=Sim_1$dat, start=start_nls, algorithm="port",
-   lower=c(A1=0,A2=0,A3=0,A4=0,A5=0,A6=0,A7=0, lambda=0.15),
+   lower=c(A1=0,A2=0,A3=0,A4=0,A5=0,A6=0,A7=0, lambda=1e-4),
    upper=c(A1=Inf,A2=Inf,A3=Inf,A4=Inf,A5=Inf,A6=Inf,A7=Inf, lambda=2),
    control=nls.control(maxiter=500, tol=1e-4, minFactor=1/2048)
  )
@@ -390,29 +390,31 @@ run_one_sim <- function(seed = NULL, save_dir = "E:/UBC/Final Project/New folder
  ######   Joint modeling   #####
  ###############################
  
+ div_sim <- 100
+ fe_sim  <- fixef(fit_nlme_sim)
+ sd_sim  <- sqrt(as.numeric(VarCorr(fit_nlme_sim)["lambda", "Variance"]))
  
  nlmeObject_sim <- list(
-   type = "nlme",
-   family = "EXP_Delay",
-   fm = fm1_sim,
-   sigma = "sigma",
-   disp = "b_11",
-   A_names = paste0("A",1:7),
-   ind_names = paste0("ind_k",1:7),
-   lag_names = paste0("lag_k",1:7),
-   lambda_name = "lambda",
-   ran_map = list(
-     lambda = "b_11"
-   ),
-   str_val = c(as.list(fixef(fit_nlme_sim)),  sd(ranef(fit_nlme_sim)[["lambda"]])),      # A1..A7 + lambda
-   CenObject = NULL
+   type         = "nlme",
+   family       = "EXP_Delay",
+   fm           = fm1_sim,
+   sigma        = "sigma",
+   disp         = "sigma_b11",               # d1, estimated as a dispersion parameter
+   lower        = 0,
+   upper        = Inf,
+   A_names      = paste0("A", 1:7),
+   ind_names    = paste0("ind_k", 1:7),
+   lag_names    = paste0("lag_k", 1:7),
+   lambda_name  = "lambda",
+   lambda_scale = "identity",                # lambda_i = (lambda + sigma_b11 * b_11) / div
+   lambda_div   = div_sim,
+   ran_map      = list(lambda = "b_11"),
+   re_disp      = list(b_11 = "sigma_b11"),
+   str_val      = c(fe_sim[paste0("A", 1:7)],
+                    lambda    = unname(fe_sim["lambda"]) * div_sim,
+                    sigma_b11 = sd_sim * div_sim),
+   CenObject    = NULL
  )
- 
- lambda_hat <- as.numeric(fixef(fit_nlme_sim)["lambda"])
- sd_lambda  <- as.numeric(sd(ranef(fit_nlme_sim)[["lambda"]]))
- 
- nlmeObject_sim$str_val[[9]] <- log(lambda_hat / sd_lambda)
- nlmeObject_sim$str_val$lambda <- log(lambda_hat)
  
  
  # binary data
@@ -481,7 +483,9 @@ run_one_sim <- function(seed = NULL, save_dir = "E:/UBC/Final Project/New folder
      se = out[, "Std.Error"],
      param_names = rownames(out),
      summary_result = out,
-     fit = Sim_result
+     disp = unlist(Sim_result$sigma),         # sigma, sigma_b11, alpha4, alpha5
+     r12  = Sim_result$covBi[1, 2],
+     fit  = Sim_result
    ),
    twostep = list(
      nlme = list(
@@ -508,7 +512,7 @@ true_par <- c(
   A5 = 0.21,
   A6 = 0.06, # 0.12
   A7 = 0.03, # 0.1
-  lambda = -5.51,
+  lambda = 0.0185 * 100,
   alpha0 = -1.65,
   alpha1 = 0.11,
   alpha2 = 1.6,
@@ -575,33 +579,6 @@ while (success_count < target_success) {
 }
 
 
-# -------------------------------------------------------------------
-#
-
-# jmsummary_sd_naive <- vector("list", length(res_new_for_test))
-jmsummary_sd_robust <- vector("list", length(res_new_for_test))
-
-for (i in seq_along(res_new_for_test)) {
-  cat("Running", i, "\n")
-  
-  fit_i <- res_new_for_test[[i]]$joint$fit
-  
-  jmsummary_sd_robust[[i]] <- tryCatch({
-    sd_i <- JMsd_aGH(
-      fit_i,
-      ghsize = 4,
-      srcpath = srcpath,
-      paralle = TRUE
-    )$sd_robust
-    
-    JMsummary(fit_i, newSD = sd_i)
-    
-  }, error = function(e) {
-    message("Error at i = ", i, ": ", e$message)
-    NULL
-  })
-}
-
 # ----------------------- calculate SSE , BIAS, CONVERAGE, .... --------------
 est_mat <- do.call(rbind, lapply(res_new_for_test, function(x) x$joint$estimate))
 se_mat  <- do.call(rbind, lapply(res_new_for_test, function(x) x$joint$se))
@@ -635,10 +612,10 @@ est_mean <- colMeans(est_mat)
 SSE <- apply(est_mat, 2, sd)
 rBias <- (est_mean - true_par) / true_par * 100
 
-rMSE <- sqrt(colMeans((est_mat - matrix(true_par,
+rMSE <- colMeans((est_mat - matrix(true_par,
                                         nrow(est_mat),
                                         length(true_par),
-                                        byrow=TRUE))^2)) /
+                                        byrow=TRUE))^2) /
   abs(true_par) * 100
 
 
@@ -729,24 +706,13 @@ coverage_empirical <- all_est2 %>%
 
 
 # ------------------------ two-step ---------------------------------
-nlme_est <- do.call(rbind,
-                    lapply(res_new1, function(x) x$twostep$nlme$estimate)
-)
+nlme_est <- do.call(rbind, lapply(res_new_for_test, function(x) x$twostep$nlme$estimate))
+nlme_se  <- do.call(rbind, lapply(res_new_for_test, function(x) x$twostep$nlme$se))
 
-nlme_se <- do.call(rbind,
-                   lapply(res_new1, function(x) x$twostep$nlme$se)
-)
 
-true_nlme <- c(
-  A1 = 1.49,
-  A2 = 0.74,
-  A3 = 0.18,
-  A4 = 0.18,
-  A5 = 0.21,
-  A6 = 0.06,
-  A7 = 0.03,
-  lambda = exp(-5.51)
-)
+true_nlme <- c(A1 = 1.49, A2 = 0.74, A3 = 0.18, A4 = 0.18,
+               A5 = 0.21, A6 = 0.06, A7 = 0.03,
+               lambda = 0.0185) 
 
 lower <- nlme_est - 1.96 * nlme_se
 upper <- nlme_est + 1.96 * nlme_se
@@ -764,237 +730,250 @@ coverage_nlme <- colMeans(
 
 
 
-# 
-# 
-# # ----------------------- interval censored-------------------------
-# 
-# run_inverval_sim <- function(seed = NULL) {
-#   if (!is.null(seed)) set.seed(seed)
-#   
-# 
-#     
-#   Sim_2 <-  SimData3(n=200, 
-#                      ZX=c('month','sindoes','doesW', 'trb1'), 
-#                      YX=c("month",'month2','sindoes'), sigma_lme=1.3, 
-#                      A=NULL, 
-#                      lambda = NULL, sigma_nlme = NULL,
-#                      Vtime=c(0,1,6,12,18,24,30),
-#                      endTrial=36,
-#                      alpha=c(-1.2, 0.08, 0.9, -0.02, 0.15, 0.03), 
-#                      beta = c(0.3, 1.8, 1.8, 0.97, -0.9), delim_val=1.47, regime=1, 
-#                      rate=NULL, 
-#                      Xi=c(0, 0.6), Asso = c(0.4, 0.05), #(For surivival model) Xi -> parameter for fixed effect; Asso -> association parameter in random effect 
-#                      scale=50, shape=5, 
-#                      censor_type = "right",
-#                      ran_p=c(1,1), # number of random effect for each model
-#                      SIGMA=diag(c(1, 1)) , 
-#                      cen_par = c(5, 25),
-#                      check=F,
-#                      freq=T,  # high frequency of check point
-#                      contaminated=F, # if there is outlier in lme
-#                      percent=0 #percent of outlier
-#   ) 
-#   
-#   
-#   
-#   # (1) Model 1: LME of y
-#   fm1_sim <-  y ~ 1+ month+month2+sindoes+(1|sid)
-#   md1_sim <- lmer(fm1_sim, data=Sim_2$dat)
-#   
-#   # get the estimated random effect by observation
-#   estBi <- data.frame(row.names(ranef(md1_sim)$sid), 
-#                       scale(ranef(md1_sim)$sid, center=T,scale=T))
-#   names(estBi) <- c("sid", "estb11")
-#   mydat_sim <- merge(Sim_2$dat, estBi, by = "sid", all.x = TRUE)
-#   
-#   
-#   # (1.5) Model 1.5: a GLME model of C
-#   # using the estimated random intercept from model 1 (i.e. estb11, scaled) as a covariate
-#   fm2 <- c ~ 1+month+month2+sindoes+ estb11
-#   md2 <- glm(fm2, family=binomial, data=mydat_sim)
-#   
-#   # (2) Model 2: a GLME model of C
-#   ## using the estimated random intercept from model 1 (i.e. estb11, scaled) as a covariate
-#   fm2_sim <- z ~ 1+month+sindoes+doesW+estb11+(month-1|sid)
-#   md2_sim <- glmer(fm2_sim, family="binomial", data=mydat_sim)
-#   
-#   
-#   
-#   # (3) Model 3: a survival model
-#   Sdata_sim <- Sim_2$surv.dat
-#   Sdata_sim$estb11 <- scale(ranef(md1_sim)$sid[,1], center=T, scale=T)
-#   Sdata_sim$estb21 <- scale(ranef(md2_sim)$sid[,1], center=T, scale=T)
-#   
-#   fitCOX2_sim <- coxph(Surv(event_time, event) ~ base+ estb11 + estb21, data =  Sdata_sim)
-#   # a interval weibull model
-#   # fitcox2_sim <- survreg(
-#   #   Surv(time = L, time2 = R, type = "interval2") ~ base+ estb11+estb21,
-#   #   data = Sdata_sim,
-#   #   dist = "weibull"
-#   # )
-#   ###############################
-#   ######   Joint modeling   #####
-#   ###############################
-#   LLOQ = 2 # lower limit of quantification of Y
-#   
-#   CenObject <- list(
-#     fm= c ~ 1  + month +month2 +sindoes + b11,
-#     family='binomial', par='eta', ran.par="b11",
-#     disp="eta4",
-#     lower= -Inf, upper=Inf,
-#     str_val=coef(md2),
-#     Cregime=1,
-#     truncated=T, delim_val=LLOQ)
-# 
-#   
-#   glmeObject1_sim <- list(
-#     fm= y ~ 1 + month + month2 + sindoes + b11,
-#     family='normal', par="beta", ran.par='b11', sigma='sigma',
-#     disp='beta4',
-#     lower=0, upper=Inf,   
-#     str_val=c(fixef(md1_sim), sd(ranef(md1_sim)$sid[,1])),
-#     CenObject=NULL)
-#   
-#   glmeObject2_sim <- list(
-#     fm= z ~ 1 + month + sindoes +doesW + b11 + month*b21,
-#     family='binomial', par="alpha", ran.par=c('b11','b21'),
-#     sigma=NULL, 
-#     disp=c("alpha4", 'alpha5'),
-#     lower=c(-Inf,0),
-#     upper=rep(Inf,2),
-#     str_val=c(fixef(md2_sim), sd(ranef(md2_sim)$sid[,1])),
-#     CenObject=NULL)
-#   
-#   glmeObject_sim <- list(glmeObject1_sim, glmeObject2_sim)
-#   
-#   
-#   ## Weibull interval cencored
-#   # survObject_intPH <- list( fm = Surv(L, R) ~ base+ b11+b21, 
-#   #                             event = "event", 
-#   #                           par = "lambda", # betas: lambda0, lambda1, ... 
-#   #                           disp = NULL, 
-#   #                           lower=c(0, 0), 
-#   #                           upper=c(Inf, Inf), 
-#   #                           distribution = "weibull_ph_interval", 
-#   #                           str_val = -summary(fitcox2_sim)$coeff[-1]/summary(fitcox2_sim)$scale) 
-#   # 
-#   
-#   survObject_sim <- list(
-#     fm= event_time ~ base+ b11 + b21,
-#     event="event", 
-#     par='xi',
-#     disp=NULL,
-#     lower=NULL, upper=NULL,
-#     distribution=NULL,
-#     str_val= summary(fitCOX2_sim)$coeff[,1])
-#   
-#   
-#   Sim_result <- JMfit(
-#     glmeObject = glmeObject_sim,
-#     survObject = survObject_sim,
-#     long.data = Sim_2$dat, 
-#     surv.data = Sim_2$surv.dat,
-#     idVar="sid", 
-#     eventTime="event_time",
-#     survFit= fitCOX2_sim,
-#     method = "h-likelihood", Silent=T)
-#   
-#   
-#   
-#   
-#   
-#   
-#   
-#   out <- JMsummary(Sim_result)
-#   
-#   ## -------- 2-step results --------
-#   step1_lme_est <- fixef(md1_sim)
-#   step1_lme_sd  <- sqrt(diag(vcov(md1_sim)))
-#   
-#   step2_glmer_est <- fixef(md2_sim)
-#   step2_glmer_sd  <- sqrt(diag(vcov(md2_sim)))
-#   
-#   step3_weibull_est <- coef(fitcox2_sim)
-#   step3_weibull_sd  <- sqrt(diag(vcov(fitcox2_sim)))
-#   
-#   list(
-#     seed = seed,
-#     joint = list(
-#       estimate = out[, "Estimate"],
-#       se = out[, "Std.Error"],
-#       param_names = rownames(out),
-#       raw = out
-#     ),
-#     twostep = list(
-#       nlme = list(
-#         estimate = step1_lme_est,
-#         se = step1_lme_sd
-#       ),
-#       glmer = list(
-#         estimate = step2_glmer_est,
-#         se = step2_glmer_sd
-#       ),
-#       weibull = list(
-#         estimate = step3_weibull_est,
-#         se = step3_weibull_sd
-#       )
-#     )
-#   )
-# }
-# 
-# 
-# 
-# 
-# 
-# 
-# 
-# 
-# # -------- run function -------------------
-# target_success_2 <- 1
-# success_count_2 <- 0
-# attempt_2 <- 0
-# 
-# res_new00 <- list()
-# 
-# while (success_count_2 < target_success_2) {
-#   
-#   attempt_2 <- attempt_2 + 1
-#   message("Attempt ", attempt_2, " start: ", Sys.time())
-#   
-#   tic()
-#   
-#   res <- tryCatch(
-#     run_inverval_sim(seed = 1000 + attempt_2),
-#     error = function(e) {
-#       message("Attempt ", attempt_2, " failed: ", e$message)
-#       NULL
-#     }
-#   )
-#   
-#   toc()
-#   
-#   if (!is.null(res)) {
-#     
-#     success_count <- success_count_2 + 1
-#     res_new00[[success_count_2]] <- res
-#     
-#     message("Success ", success_count_2, "/", target_success_2)
-#     
-#   }
-# }
-# 
-# 
 
-lambda_vec <- sapply(res_new_for_test, function(x) x$joint$estimate[8])
-lambda_se <- sapply(res_new_for_test, function(x) x$joint$fit$fixedsd[8])
+ # ----------------------- interval censored-------------------------
 
-exp(lambda_vec)*lambda_se
-qqnorm(exp(lambda_vec)*lambda_se)
-qqline(lambda_vec)
+run_LME_from_sim <- function(one_res, Silent = TRUE) {
+  
+  sim_obj <- readRDS(one_res$data_file)
+  
+  long_dat <- sim_obj$sim_dat
+  surv_dat <- sim_obj$sim_surv_dat
+  
+  # (1) Model 1: LME of y
+  fm1_lme_sim <- y ~ 1 + month + month2 + sindoes + (1 | sid)
+  
+  md1_sim <- lmer(fm1_lme_sim, data = long_dat)
+  
+  
+  # get the estimated random effect by observation
+  b_11_sim <- as.numeric(scale(ranef(md1_sim)$sid[, 1], center = TRUE, scale = TRUE))
+  
+  b_11_add_sim <- data.frame(
+    sid = rownames(ranef(md1_sim)$sid),
+    b_11 = b_11_sim
+  )
+  
+  mydat_lme_sim <- merge(long_dat, b_11_add_sim, by = "sid", all.x = TRUE)
+  
+  # (2) Model 2: GLMM of z
+  fm3_sim <- z ~ 1 + month + sindoes + doesW + b_11 + (month - 1 | sid)
+  md3_sim <- glmer(fm3_sim, family = "binomial", data = mydat_lme_sim)
+  
+  # (3) Model 3: a survival model
+  Sdata_lme_sim <- surv_dat
+  Sdata_lme_sim$b_11 <- as.numeric(scale(ranef(md1_sim)$sid[, 1], center = TRUE, scale = TRUE))
+  Sdata_lme_sim$b_21 <- as.numeric(scale(ranef(md3_sim)$sid[, 1], center = TRUE, scale = TRUE))
+  
+  
+  
+  
+  # a Cox PH model
+  fitCOX1_sim <- coxph(Surv(event_time, event) ~ base + b_11 + b_21, data = Sdata_lme_sim)
+  
+  
+  ###############################
+  ######   Joint modeling   #####
+  ###############################
+  
+  
+  glmeObject1_lme_sim <- list(
+    fm = y ~ 1 + month + month2 + sindoes + b_11,
+    family = "normal",
+    par = "beta",
+    ran.par = "b_11",
+    sigma = "sigma",
+    disp = "beta4",
+    lower = 0,
+    upper = Inf,
+    str_val = c(fixef(md1_sim), sd(ranef(md1_sim)$sid[, 1])),
+    CenObject = NULL
+  )
+  
+  
+  
+  # binary data
+  glmeObject2_lme_sim <- list(
+    fm = z ~ 1 + month + sindoes + doesW + b_11 + month * b_21,
+    family = "binomial",
+    par = "alpha",
+    ran.par = c("b_11", "b_21"),
+    sigma = NULL,
+    disp = c("alpha4", "alpha5"),
+    lower = c(-Inf, 0),
+    upper = rep(Inf, 2),
+    str_val = c(fixef(md3_sim), sd(ranef(md3_sim)$sid[, 1])),
+    CenObject = NULL
+  )
+  
+  glmeObject_lme_sim <- list(glmeObject1_lme_sim, glmeObject2_lme_sim)
+  
+  survObject_lme_sim <- list(
+    fm= event_time ~ base+ b_11 + b_21,
+    event="event", 
+    par='xi',
+    disp=NULL,
+    lower=NULL, upper=NULL,
+    distribution=NULL,
+    str_val= summary(fitCOX1_sim)$coeff[,1])
+  
+  
+  Sim_result <- JMfit(
+    glmeObject = glmeObject_lme_sim,
+    survObject = survObject_lme_sim,
+    long.data = long_dat,
+    surv.data = surv_dat,
+    idVar = "sid",
+    eventTime = "event_time",
+    survFit = fitCOX1_sim,
+    method = "h-likelihood",
+    Silent = TRUE
+  )
 
-lower <- exp(lambda_vec - 1.96 * lambda_se)
-upper <- exp(lambda_vec + 1.96 * lambda_se)
 
-covered <- (exp(-5.51) >= lower) & (exp(-5.51) <= upper)
-coverage <- mean(covered, na.rm = TRUE)
-coverage <- mean(covered, na.rm = TRUE)
+
+
+
+
+  out <- JMsummary(Sim_result)
+
+  ## -------- 2-step results --------
+  step1_lme_est <- fixef(md1_sim)
+  step1_lme_sd  <- sqrt(diag(vcov(md1_sim)))
+
+  step2_glmer_est <- fixef(md3_sim)
+  step2_glmer_sd  <- sqrt(diag(vcov(md3_sim)))
+
+  step3_weibull_est <- coef(fitCOX1_sim)
+  step3_weibull_sd  <- sqrt(diag(vcov(fitCOX1_sim)))
+
+  list(
+    joint = list(
+      estimate = out[, "Estimate"],
+      se = out[, "Std.Error"],
+      param_names = rownames(out),
+      raw = out
+    ),
+    twostep = list(
+      nlme = list(
+        estimate = step1_lme_est,
+        se = step1_lme_sd
+      ),
+      glmer = list(
+        estimate = step2_glmer_est,
+        se = step2_glmer_sd
+      ),
+      weibull = list(
+        estimate = step3_weibull_est,
+        se = step3_weibull_sd
+      )
+    )
+  )
+}
+
+
+
+
+ # -------- run function -------------------
+res_lme_from_rds <- vector("list", length(res_new_for_test))
+
+for (i in seq_along(res_new_for_test)) {
+  cat("Running", i, "\n")
+  
+  res_lme_from_rds[[i]] <- tryCatch({
+    run_LME_from_sim(
+      one_res = res_new_for_test[[i]],
+      Silent = TRUE
+    )
+  }, error = function(e) {
+    message("Error at i = ", i, ": ", e$message)
+    NULL
+  })
+}
+
+
+
+
+
+
+# ------------------- for lambda (delta method)--------------------
+# ------------------- lambda: model-based coverage and QQ plot --------------------
+lambda_vec <- sapply(res_new_for_test, function(x) x$joint$estimate[8])      # program scale
+lambda_se  <- sapply(res_new_for_test, function(x) x$joint$fit$fixedsd[8])
+
+z <- (lambda_vec - true_par["lambda"]) / lambda_se
+z <- na.omit(z)
+
+c(coverage_model = mean(abs(z) <= 1.96),
+  mean_est = mean(lambda_vec) / 100,
+  mean_se  = mean(lambda_se) / 100,
+  emp_sd   = sd(lambda_vec) / 100)
+
+qqnorm(z, main = "QQ plot of standardized lambda")
+qqline(z, col = "red")
+
+# ----------------------- calculate SSE , BIAS, CONVERAGE, .... --------------
+# ----------------------- Extract estimates -----------------------
+est_mat <- do.call(rbind, lapply(res_lme_from_rds, function(x) x$joint$estimate))
+se_mat  <- do.call(rbind, lapply(res_lme_from_rds, function(x) x$joint$se))
+
+param_names <- res_lme_from_rds[[1]]$joint$param_names
+colnames(est_mat) <- param_names
+colnames(se_mat)  <- param_names
+
+# ----------------------- Basic summaries -----------------------
+est_mean <- colMeans(est_mat)
+mean_Se  <- colMeans(se_mat)
+MCSD     <- apply(est_mat, 2, sd)
+
+result_table_all <- data.frame(
+  Par = param_names,
+  Estimate = est_mean,
+  meanse = mean_Se,
+  MCSD = MCSD
+)
+
+# ----------------------- Comparable parameters -----------------------
+common_par   <- intersect(param_names, names(true_par))
+est_cmp      <- est_mat[, common_par, drop = FALSE]
+se_cmp       <- se_mat[, common_par, drop = FALSE]
+true_cmp     <- true_par[common_par]
+
+est_mean_cmp <- colMeans(est_cmp)
+mean_Se_cmp  <- colMeans(se_cmp)
+MCSD_cmp     <- apply(est_cmp, 2, sd)
+
+# Bias & MSE
+rBias <- (est_mean_cmp - true_cmp) / true_cmp * 100
+
+true_mat <- matrix(true_cmp, nrow(est_cmp), length(true_cmp), byrow = TRUE)
+rMSE <- colMeans((est_cmp - true_mat)^2) / abs(true_cmp) * 100
+
+# ----------------------- Coverage -----------------------
+# model-based
+lower <- est_cmp - 1.96 * se_cmp
+upper <- est_cmp + 1.96 * se_cmp
+coverage <- colMeans((lower <= true_mat) & (true_mat <= upper)) * 100
+
+# empirical SD based
+MCSD_mat <- matrix(MCSD_cmp, nrow(est_cmp), length(MCSD_cmp), byrow = TRUE)
+lower_emp <- est_cmp - 1.96 * MCSD_mat
+upper_emp <- est_cmp + 1.96 * MCSD_mat
+coverage_emp <- colMeans((lower_emp <= true_mat) & (true_mat <= upper_emp)) * 100
+
+# ----------------------- Final table -----------------------
+result_table_cmp <- data.frame(
+  Par = common_par,
+  True = true_cmp,
+  Estimate = est_mean_cmp,
+  meanse = mean_Se_cmp,
+  MCSD = MCSD_cmp,
+  rBias = rBias,
+  rMSE = rMSE,
+  Coverage_model = coverage,
+  Coverage_emp = coverage_emp
+)
+
+# ----------------------- Round -----------------------
+result_table_all[, -1] <- round(result_table_all[, -1], 3)
+result_table_cmp[, -1] <- round(result_table_cmp[, -1], 3)
